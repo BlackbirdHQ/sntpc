@@ -157,11 +157,13 @@ use core::mem;
 mod net {
     #[cfg(not(feature = "std"))]
     pub use no_std_net::{SocketAddr, ToSocketAddrs};
+    // pub use
 
     #[cfg(feature = "std")]
     pub use std::net::{SocketAddr, ToSocketAddrs};
 }
 
+use embedded_nal::UdpClientStack;
 #[cfg(feature = "log")]
 use log::debug;
 
@@ -262,7 +264,7 @@ pub enum Error {
     /// Incorrect stratum headers in a NTP response
     IncorrectStratumHeaders,
     /// Payload size of a NTP response does not meet SNTPv4 specification
-    IncorrectPayload,
+    IncorrectPayload(usize),
     /// Network error occurred.
     Network,
     /// A NTP server address can not be resolved
@@ -318,6 +320,12 @@ impl NtpResult {
         self.seconds_fraction
     }
 
+    /// Returns the number of nanoseconds since the last second boundary
+    pub fn subsec_nanos(&self) -> u32 {
+        (((self.sec_fraction() as f64) / u32::MAX as f64) * 1_000_000_000f64)
+            as u32
+    }
+
     /// Returns request's roundtrip time (client -> server -> client) in microseconds
     pub fn roundtrip(&self) -> u64 {
         self.roundtrip
@@ -335,7 +343,7 @@ impl NtpPacket {
     const SNTP_CLIENT_MODE: u8 = 3;
     const SNTP_VERSION: u8 = 4 << 3;
 
-    pub fn new<T: NtpTimestampGenerator>(mut timestamp_gen: T) -> NtpPacket {
+    pub fn new<T: NtpTimestampGenerator>(timestamp_gen: &mut T) -> NtpPacket {
         timestamp_gen.init();
         let tx_timestamp = get_ntp_timestamp(timestamp_gen);
 
@@ -415,12 +423,12 @@ pub trait NtpUdpSocket {
 
 /// SNTP client context that contains of objects that may be required for client's
 /// operation
-#[derive(Copy, Clone)]
+#[derive(Clone)]
 pub struct NtpContext<T: NtpTimestampGenerator> {
     pub timestamp_gen: T,
 }
 
-impl<T: NtpTimestampGenerator + Copy> NtpContext<T> {
+impl<T: NtpTimestampGenerator> NtpContext<T> {
     /// Create SNTP client context with the given timestamp generator
     pub fn new(timestamp_gen: T) -> Self {
         NtpContext { timestamp_gen }
@@ -631,20 +639,20 @@ impl From<&NtpPacket> for RawNtpPacket {
 ///
 /// // .. process the result
 /// ```
-pub fn get_time<A, U, T>(
-    pool_addrs: A,
-    socket: U,
-    context: NtpContext<T>,
-) -> Result<NtpResult>
-where
-    A: net::ToSocketAddrs + Copy + Debug,
-    U: NtpUdpSocket + Debug,
-    T: NtpTimestampGenerator + Copy,
-{
-    let result = sntp_send_request(pool_addrs, &socket, context)?;
+// pub fn get_time<A, U, T>(
+//     pool_addrs: A,
+//     client: &mut U,
+//     context: NtpContext<T>,
+// ) -> Result<NtpResult>
+// where
+//     A: net::ToSocketAddrs + Copy + Debug,
+//     U: UdpClientStack + Debug,
+//     T: NtpTimestampGenerator + Copy,
+// {
+//     let result = sntp_send_request(pool_addrs, &client, context)?;
 
-    sntp_process_response(pool_addrs, &socket, context, result)
-}
+//     sntp_process_response(pool_addrs, &client, context, result)
+// }
 
 /// Send SNTP request to a server
 ///
@@ -733,21 +741,20 @@ where
 /// # #[cfg(feature = "std")]
 /// let result = sntpc::sntp_send_request("time.google.com:123", &socket, ntp_context);
 /// ```
-pub fn sntp_send_request<A, U, T>(
-    dest: A,
-    socket: &U,
-    context: NtpContext<T>,
-) -> Result<SendRequestResult>
+pub fn sntp_send_request<U, T>(
+    client: &mut U,
+    context: &mut NtpContext<T>,
+    socket: &mut U::UdpSocket,
+) -> nb::Result<SendRequestResult, Error>
 where
-    A: net::ToSocketAddrs + Debug,
-    U: NtpUdpSocket + Debug,
-    T: NtpTimestampGenerator + Copy,
+    U: UdpClientStack,
+    T: NtpTimestampGenerator,
 {
     #[cfg(feature = "log")]
     debug!("Address: {:?}, Socket: {:?}", dest, *socket);
-    let request = NtpPacket::new(context.timestamp_gen);
+    let request = NtpPacket::new(&mut context.timestamp_gen);
 
-    if let Err(err) = send_request(dest, &request, socket) {
+    if let Err(err) = send_request(&request, client, socket) {
         return Err(err);
     }
 
@@ -843,35 +850,35 @@ where
 ///     let time = sntpc::sntp_process_response("time.google.com:123", &socket, ntp_context, result);
 /// }
 /// ```
-pub fn sntp_process_response<A, U, T>(
-    dest: A,
-    socket: &U,
-    mut context: NtpContext<T>,
+pub fn sntp_process_response<U, T>(
+    client: &mut U,
+    socket: &mut U::UdpSocket,
+    context: &mut NtpContext<T>,
     send_req_result: SendRequestResult,
-) -> Result<NtpResult>
+) -> nb::Result<NtpResult, Error>
 where
-    A: net::ToSocketAddrs + Debug,
-    U: NtpUdpSocket + Debug,
-    T: NtpTimestampGenerator + Copy,
+    U: UdpClientStack,
+    T: NtpTimestampGenerator,
 {
     let mut response_buf = RawNtpPacket::default();
-    let (response, src) = socket.recv_from(response_buf.0.as_mut())?;
+    defmt::info!("buf length {}", response_buf.0.len());
+    let (response, src) = client
+        .receive(socket, response_buf.0.as_mut())
+        .map_err(|e| e.map(|_| Error::Network))?;
+    // Wait until we get an actual response
+    if response == 0 {
+        return Err(nb::Error::WouldBlock);
+    }
     context.timestamp_gen.init();
-    let recv_timestamp = get_ntp_timestamp(context.timestamp_gen);
+    let recv_timestamp = get_ntp_timestamp(&mut context.timestamp_gen);
     #[cfg(feature = "log")]
     debug!("Response: {}", response);
 
-    match dest.to_socket_addrs() {
-        Err(_) => return Err(Error::AddressResolve),
-        Ok(mut it) => {
-            if !it.any(|addr| addr == src) {
-                return Err(Error::ResponseAddressMismatch);
-            }
-        }
-    }
+    // TODO still check response addr mismatch using stored state?
+    // defmt::info!("Got response: {}", defmt::Debug2Format(&response));
 
     if response != mem::size_of::<NtpPacket>() {
-        return Err(Error::IncorrectPayload);
+        return Err(nb::Error::Other(Error::IncorrectPayload(response)));
     }
 
     let result =
@@ -883,27 +890,25 @@ where
             debug!("{:?}", result);
             Ok(result)
         }
-        Err(err) => Err(err),
+        Err(err) => Err(nb::Error::Other(err)),
     };
 }
 
-fn send_request<A: net::ToSocketAddrs, U: NtpUdpSocket>(
-    dest: A,
+fn send_request<U>(
     req: &NtpPacket,
-    socket: &U,
-) -> core::result::Result<(), Error> {
+    client: &mut U,
+    socket: &mut U::UdpSocket,
+) -> nb::Result<(), Error>
+where
+    U: UdpClientStack,
+{
     let buf = RawNtpPacket::from(req);
 
-    return match socket.send_to(&buf.0, dest) {
-        Ok(size) => {
-            if size == buf.0.len() {
-                Ok(())
-            } else {
-                Err(Error::Network)
-            }
-        }
-        Err(_) => Err(Error::Network),
-    };
+    // TODO do we want to connect here? or assume socket is connected
+
+    Ok(client
+        .send(socket, &buf.0)
+        .map_err(|e| e.map(|_| Error::Network))?)
 }
 
 fn process_response(
@@ -1088,7 +1093,7 @@ fn debug_ntp_packet(packet: &NtpPacket, _recv_timestamp: u64) {
     }
 }
 
-fn get_ntp_timestamp<T: NtpTimestampGenerator>(timestamp_gen: T) -> u64 {
+fn get_ntp_timestamp<T: NtpTimestampGenerator>(timestamp_gen: &mut T) -> u64 {
     let timestamp = ((timestamp_gen.timestamp_sec()
         + (u64::from(NtpPacket::NTP_TIMESTAMP_DELTA)))
         << 32)
@@ -1102,7 +1107,18 @@ fn get_ntp_timestamp<T: NtpTimestampGenerator>(timestamp_gen: T) -> u64 {
 
 #[cfg(test)]
 mod sntpc_ntp_result_tests {
-    use crate::NtpResult;
+    use crate::{roundtrip_calculate, NtpResult};
+
+    #[test]
+    fn test_roundtrip_calculate() {
+        roundtrip_calculate(
+            16529006691753132032,
+            16529008545107828940,
+            16529008545108287849,
+            16529006691753132032,
+            crate::Units::Microseconds,
+        );
+    }
 
     #[test]
     fn test_ntp_result() {
@@ -1148,8 +1164,11 @@ mod sntpc_ntp_result_tests {
 #[cfg(all(test, feature = "std"))]
 mod sntpc_tests {
     use crate::net::{SocketAddr, ToSocketAddrs};
+    // use crate::{
+    //     get_time, Error, NtpContext, NtpTimestampGenerator, NtpUdpSocket, Units,
+    // };
     use crate::{
-        get_time, Error, NtpContext, NtpTimestampGenerator, NtpUdpSocket, Units,
+        Error, NtpContext, NtpTimestampGenerator, NtpUdpSocket, Units,
     };
     use std::net::UdpSocket;
 
@@ -1195,66 +1214,66 @@ mod sntpc_tests {
         }
     }
 
-    #[test]
-    fn test_ntp_request_sntpv4_supported() {
-        let context = NtpContext::new(StdTimestampGen::default());
-        let pools = [
-            "pool.ntp.org:123",
-            "time.google.com:123",
-            "time.apple.com:123",
-            "time.cloudflare.com:123",
-            "time.facebook.com:123",
-            "stratum1.net:123",
-        ];
+    // #[test]
+    // fn test_ntp_request_sntpv4_supported() {
+    //     let context = NtpContext::new(StdTimestampGen::default());
+    //     let pools = [
+    //         "pool.ntp.org:123",
+    //         "time.google.com:123",
+    //         "time.apple.com:123",
+    //         "time.cloudflare.com:123",
+    //         "time.facebook.com:123",
+    //         "stratum1.net:123",
+    //     ];
 
-        for pool in pools {
-            let socket = UdpSocket::bind("0.0.0.0:0").unwrap();
-            socket
-                .set_read_timeout(Some(std::time::Duration::from_secs(2)))
-                .expect("Unable to set up socket timeout");
+    //     for pool in pools {
+    //         let socket = UdpSocket::bind("0.0.0.0:0").unwrap();
+    //         socket
+    //             .set_read_timeout(Some(std::time::Duration::from_secs(2)))
+    //             .expect("Unable to set up socket timeout");
 
-            let result = get_time(pool, socket, context);
+    //         let result = get_time(pool, socket, context);
 
-            assert!(
-                result.is_ok(),
-                "{} is bad - {:?}",
-                pool,
-                result.unwrap_err()
-            );
-            assert_ne!(result.unwrap().seconds, 0);
-        }
-    }
+    //         assert!(
+    //             result.is_ok(),
+    //             "{} is bad - {:?}",
+    //             pool,
+    //             result.unwrap_err()
+    //         );
+    //         assert_ne!(result.unwrap().seconds, 0);
+    //     }
+    // }
 
-    #[test]
-    fn test_ntp_request_sntpv3_not_supported() {
-        let context = NtpContext::new(StdTimestampGen::default());
+    // #[test]
+    // fn test_ntp_request_sntpv3_not_supported() {
+    //     let context = NtpContext::new(StdTimestampGen::default());
 
-        let pools = ["time.nist.gov:123", "time.windows.com:123"];
+    //     let pools = ["time.nist.gov:123", "time.windows.com:123"];
 
-        for pool in pools {
-            let socket = UdpSocket::bind("0.0.0.0:0").unwrap();
-            socket
-                .set_read_timeout(Some(std::time::Duration::from_secs(2)))
-                .expect("Unable to set up socket timeout");
-            let result = get_time(pool, socket, context);
-            assert!(result.is_err(), "{} is ok", pool);
-            assert_eq!(result.unwrap_err(), Error::IncorrectResponseVersion);
-        }
-    }
+    //     for pool in pools {
+    //         let socket = UdpSocket::bind("0.0.0.0:0").unwrap();
+    //         socket
+    //             .set_read_timeout(Some(std::time::Duration::from_secs(2)))
+    //             .expect("Unable to set up socket timeout");
+    //         let result = get_time(pool, socket, context);
+    //         assert!(result.is_err(), "{} is ok", pool);
+    //         assert_eq!(result.unwrap_err(), Error::IncorrectResponseVersion);
+    //     }
+    // }
 
-    #[test]
-    fn test_invalid_addrs_ntp_request() {
-        let context = NtpContext::new(StdTimestampGen::default());
-        let pool = "asdf.asdf.asdf:123";
-        let socket = UdpSocket::bind("0.0.0.0:0").unwrap();
-        socket
-            .set_read_timeout(Some(std::time::Duration::from_secs(2)))
-            .expect("Unable to set up socket timeout");
+    // #[test]
+    // fn test_invalid_addrs_ntp_request() {
+    //     let context = NtpContext::new(StdTimestampGen::default());
+    //     let pool = "asdf.asdf.asdf:123";
+    //     let socket = UdpSocket::bind("0.0.0.0:0").unwrap();
+    //     socket
+    //         .set_read_timeout(Some(std::time::Duration::from_secs(2)))
+    //         .expect("Unable to set up socket timeout");
 
-        let result = get_time(pool, socket, context);
-        assert!(result.is_err(), "{} is ok", pool);
-        assert_eq!(result.unwrap_err(), Error::Network);
-    }
+    //     let result = get_time(pool, socket, context);
+    //     assert!(result.is_err(), "{} is ok", pool);
+    //     assert_eq!(result.unwrap_err(), Error::Network);
+    // }
 
     #[test]
     fn test_units_str_representation() {

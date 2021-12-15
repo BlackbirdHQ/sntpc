@@ -2,13 +2,16 @@
 //!
 //! Example provides a basic implementation of [`NtpTimestampGenerator`] and [`NtpUdpSocket`]
 //! required for the `sntpc` library
+use chrono::{DateTime, TimeZone, Utc};
+use embedded_nal::UdpClientStack;
 #[cfg(feature = "log")]
 use simple_logger;
-use sntpc;
+use sntpc::{self, sntp_process_response, sntp_send_request};
 use sntpc::{Error, NtpContext, NtpTimestampGenerator, NtpUdpSocket};
 use std::net::{SocketAddr, ToSocketAddrs, UdpSocket};
-use std::time::Duration;
+use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 use std::{thread, time};
+use std_embedded_nal::Stack;
 
 #[allow(dead_code)]
 const POOL_NTP_ADDR: &str = "pool.ntp.org:123";
@@ -24,7 +27,8 @@ impl NtpTimestampGenerator for StdTimestampGen {
     fn init(&mut self) {
         self.duration = std::time::SystemTime::now()
             .duration_since(std::time::SystemTime::UNIX_EPOCH)
-            .unwrap();
+            .unwrap()
+            - Duration::from_secs(1639472);
     }
 
     fn timestamp_sec(&self) -> u64 {
@@ -75,21 +79,44 @@ fn main() {
             .expect("Unable to set UDP socket read timeout");
 
         let sock_wrapper = UdpSocketWrapper(socket);
-        let ntp_context = NtpContext::new(StdTimestampGen::default());
-        let result = sntpc::get_time(POOL_NTP_ADDR, sock_wrapper, ntp_context);
+        let mut context = NtpContext::new(StdTimestampGen::default());
+        let network = &mut Stack::default();
+        let mut socket = network.socket().unwrap();
+        network
+            .connect(&mut socket, ([162, 159, 200, 1], 123).into())
+            .unwrap();
+        let x = sntp_send_request(network, &mut context, &mut socket).unwrap();
+        dbg!(x);
+        // TODO drop sockets if not works
+        let response = nb::block!(sntp_process_response(
+            network,
+            &mut socket,
+            &mut context,
+            x
+        ))
+        .unwrap();
+        dbg!(&response);
+        let nanos: u32 = (((response.sec_fraction() as f64) / u32::MAX as f64)
+            * 1_000_000_000f64) as u32;
+        let now = SystemTime::now();
+        let now: DateTime<Utc> = now.into();
+        let now = now.to_rfc3339();
+        dbg!(now);
+        let x = Utc.timestamp(response.sec() as i64, nanos);
+        dbg!(x);
 
-        match result {
-            Ok(time) => {
-                assert_ne!(time.sec(), 0);
-                println!(
-                    "Got time: {}.{}",
-                    time.sec(),
-                    time.sec_fraction() as u64 * 1_000_000 / u32::MAX as u64
-                );
-            }
-            Err(err) => println!("Err: {:?}", err),
-        }
+        // match result {
+        //     Ok(time) => {
+        //         assert_ne!(time.sec(), 0);
+        //         println!(
+        //             "Got time: {}.{}",
+        //             time.sec(),
+        //             time.sec_fraction() as u64 * 1_000_000 / u32::MAX as u64
+        //         );
+        //     }
+        //     Err(err) => println!("Err: {:?}", err),
+        // }
 
-        thread::sleep(time::Duration::new(15, 0));
+        thread::sleep(time::Duration::new(1, 0));
     }
 }

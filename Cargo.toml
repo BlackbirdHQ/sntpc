@@ -21,26 +21,36 @@ exclude = [
 
 [features]
 default = ["std"]
-std = []
+std = ["chrono"]
 utils = ["std", "chrono/clock"]
+defmt-default = []
+defmt-trace = []
+defmt-debug = []
+defmt-info = []
+defmt-warn = []
+defmt-error = []
 
 [dependencies]
 log = { version = "~0.4", optional = true }
 chrono = { version = "~0.4", default-features = false, optional = true }
 # requred till this https://github.com/rust-lang/rfcs/pull/2832 is not addressed
 no-std-net = "~0.5"
+embedded-nal = "0.6.0"
+nb = "^1"
+defmt = { version = "0.2.2" }
 
 [dev-dependencies]
 simple_logger = { version = "~1.13" }
 smoltcp = { version = "~0.7", default-features = false, features = ["phy-tap_interface", "socket-udp", "proto-ipv4"] }
 clap = { version = "2.33", default-features = false }
+std-embedded-nal = "0.1.2"
 
 [badges]
 travis-ci = { repository = "vpetrigo/sntpc", branch = "master" }
 
 [[example]]
 name = "simple_request"
-required-features = ["std"]
+required-features = ["std", "chrono"]
 
 [[example]]
 name = "timesync"
