@@ -747,7 +747,7 @@ pub fn sntp_send_request<U, T>(
     socket: &mut U::UdpSocket,
 ) -> nb::Result<SendRequestResult, Error>
 where
-    U: UdpClientStack,
+    U: UdpClientStack + ?Sized,
     T: NtpTimestampGenerator,
 {
     #[cfg(feature = "log")]
@@ -857,16 +857,17 @@ pub fn sntp_process_response<U, T>(
     send_req_result: SendRequestResult,
 ) -> nb::Result<NtpResult, Error>
 where
-    U: UdpClientStack,
+    U: UdpClientStack + ?Sized,
     T: NtpTimestampGenerator,
 {
     let mut response_buf = RawNtpPacket::default();
-    defmt::info!("buf length {}", response_buf.0.len());
+
     let (response, src) = client
         .receive(socket, response_buf.0.as_mut())
         .map_err(|e| e.map(|_| Error::Network))?;
     // Wait until we get an actual response
     if response == 0 {
+        // defmt::info!("got empty response, returning WouldBlock");
         return Err(nb::Error::WouldBlock);
     }
     context.timestamp_gen.init();
@@ -900,7 +901,7 @@ fn send_request<U>(
     socket: &mut U::UdpSocket,
 ) -> nb::Result<(), Error>
 where
-    U: UdpClientStack,
+    U: UdpClientStack + ?Sized,
 {
     let buf = RawNtpPacket::from(req);
 
