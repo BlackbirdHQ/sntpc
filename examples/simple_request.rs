@@ -27,8 +27,7 @@ impl NtpTimestampGenerator for StdTimestampGen {
     fn init(&mut self) {
         self.duration = std::time::SystemTime::now()
             .duration_since(std::time::SystemTime::UNIX_EPOCH)
-            .unwrap()
-            - Duration::from_secs(1639472);
+            .unwrap();
     }
 
     fn timestamp_sec(&self) -> u64 {
@@ -100,9 +99,8 @@ fn main() {
             * 1_000_000_000f64) as u32;
         let now = SystemTime::now();
         let now: DateTime<Utc> = now.into();
-        let now = now.to_rfc3339();
-        dbg!(now);
         let x = Utc.timestamp(response.sec() as i64, nanos);
+        println!("Drift {:?}ms", (now - x).num_milliseconds());
         dbg!(x);
 
         // match result {
