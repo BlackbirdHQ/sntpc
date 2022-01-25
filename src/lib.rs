@@ -150,7 +150,6 @@ pub mod utils;
 
 use core::fmt::Formatter;
 use core::fmt::{Debug, Display};
-use core::iter::Iterator;
 use core::marker::Copy;
 use core::mem;
 
@@ -862,7 +861,7 @@ where
 {
     let mut response_buf = RawNtpPacket::default();
 
-    let (response, src) = client
+    let (response, _src) = client
         .receive(socket, response_buf.0.as_mut())
         .map_err(|e| e.map(|_| Error::Network))?;
     // Wait until we get an actual response
@@ -1009,7 +1008,7 @@ fn roundtrip_calculate(
     t4: u64,
     units: Units,
 ) -> u64 {
-    let delta = (t4 - t1) - (t3 - t2);
+    let delta = t4.wrapping_sub(t1).wrapping_sub(t3.wrapping_sub(t2));
     let delta_sec = (delta & SECONDS_MASK) >> 32;
     let delta_sec_fraction = delta & SECONDS_FRAC_MASK;
 
@@ -1165,11 +1164,8 @@ mod sntpc_ntp_result_tests {
 #[cfg(all(test, feature = "std"))]
 mod sntpc_tests {
     use crate::net::{SocketAddr, ToSocketAddrs};
-    // use crate::{
-    //     get_time, Error, NtpContext, NtpTimestampGenerator, NtpUdpSocket, Units,
-    // };
     use crate::{
-        Error, NtpContext, NtpTimestampGenerator, NtpUdpSocket, Units,
+        Error, NtpTimestampGenerator, NtpUdpSocket, Units,
     };
     use std::net::UdpSocket;
 

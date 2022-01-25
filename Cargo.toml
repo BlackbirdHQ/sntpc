@@ -37,7 +37,7 @@ chrono = { version = "~0.4", default-features = false, optional = true }
 no-std-net = "~0.5"
 embedded-nal = "0.6.0"
 nb = "^1"
-defmt = { version = "0.2.2" }
+defmt = { version = "0.3" }
 
 [dev-dependencies]
 simple_logger = { version = "~1.13" }
