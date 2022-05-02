@@ -341,6 +341,7 @@ impl NtpPacket {
     const NTP_TIMESTAMP_DELTA: u32 = 2_208_988_800u32;
     const SNTP_CLIENT_MODE: u8 = 3;
     const SNTP_VERSION: u8 = 4 << 3;
+    const OUT_OF_SYNC: u8 = 3 << 6;
 
     pub fn new<T: NtpTimestampGenerator>(timestamp_gen: &mut T) -> NtpPacket {
         timestamp_gen.init();
@@ -350,7 +351,7 @@ impl NtpPacket {
         debug!(target: "NtpPacket::new", "{}", tx_timestamp);
 
         NtpPacket {
-            li_vn_mode: NtpPacket::SNTP_CLIENT_MODE | NtpPacket::SNTP_VERSION,
+            li_vn_mode: NtpPacket::SNTP_CLIENT_MODE | NtpPacket::SNTP_VERSION | NtpPacket::OUT_OF_SYNC,
             stratum: 0,
             poll: 0,
             precision: 0,
@@ -360,7 +361,7 @@ impl NtpPacket {
             ref_timestamp: 0,
             origin_timestamp: 0,
             recv_timestamp: 0,
-            tx_timestamp,
+            tx_timestamp: 0,
         }
     }
 }
