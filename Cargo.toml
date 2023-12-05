@@ -28,7 +28,7 @@ utils = ["std", "chrono/clock"]
 log = { version = "~0.4", optional = true }
 chrono = { version = "~0.4", default-features = false, optional = true }
 # requred till this https://github.com/rust-lang/rfcs/pull/2832 is not addressed
-no-std-net = "~0.5"
+no-std-net = "~0.6"
 
 [dev-dependencies]
 simple_logger = { version = "~1.13" }
