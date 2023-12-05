@@ -34,8 +34,8 @@ defmt-error = []
 log = { version = "~0.4", optional = true }
 chrono = { version = "~0.4", default-features = false, optional = true }
 # requred till this https://github.com/rust-lang/rfcs/pull/2832 is not addressed
-no-std-net = "~0.5"
-embedded-nal = "0.6.0"
+no-std-net = "~0.6"
+embedded-nal = "0.8.0"
 nb = "^1"
 defmt = { version = "0.3" }
 
